@@ -1,0 +1,54 @@
+import streamlit as st
+import time
+import pandas as pd
+from datetime import datetime
+
+st.title("无人机通信心跳监测可视化")
+
+# 初始化数据
+if "heartbeats" not in st.session_state:
+    st.session_state.heartbeats = []
+    st.session_state.last_time = time.time()
+    st.session_state.seq = 0
+
+# 模拟心跳生成
+def generate_heartbeat():
+    st.session_state.seq += 1
+    now = datetime.now()
+    st.session_state.heartbeats.append({
+        "序号": st.session_state.seq,
+        "时间": now,
+        "时间戳": time.time()
+    })
+    st.session_state.last_time = time.time()
+
+# 检测掉线
+def check_disconnect():
+    current_time = time.time()
+    if current_time - st.session_state.last_time > 3:
+        st.error("⚠️ 超时：3秒未收到心跳包，无人机可能掉线！")
+
+# 界面控制
+col1, col2 = st.columns(2)
+with col1:
+    if st.button("发送心跳"):
+        generate_heartbeat()
+with col2:
+    if st.button("检查连接"):
+        check_disconnect()
+
+# 自动模拟心跳（可选）
+if st.checkbox("自动模拟心跳（每秒1次）"):
+    while True:
+        generate_heartbeat()
+        time.sleep(1)
+        st.rerun()
+
+# 可视化
+if st.session_state.heartbeats:
+    df = pd.DataFrame(st.session_state.heartbeats)
+    st.subheader("心跳时序变化")
+    st.line_chart(df, x="时间", y="序号")
+    st.dataframe(df）
+streamlit
+pandas
