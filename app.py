@@ -183,11 +183,11 @@ st.set_page_config(page_title="无人机智能化应用Demo", layout="wide")
 # ---------------------- 侧边栏导航 ----------------------
 with st.sidebar:
     st.title("导航")
-    page = st.radio("功能页面", ["航线规划", "飞行监控"], key="page_radio")
+    page = st.radio("功能页面", ["航线规划", "飞行监控"], key="page_selector")
     st.divider()
     
     st.title("坐标系设置")
-    coord_system = st.radio("输入坐标系", ["WGS-84", "GCJ-02(高德/百度)"], key="coord_system_radio")
+    coord_system = st.radio("输入坐标系", ["WGS-84", "GCJ-02(高德/百度)"], key="coord_system_selector")
     st.divider()
     
     st.title("系统状态")
@@ -216,11 +216,11 @@ if page == "航线规划":
         with col_a:
             st.subheader("起点 A")
             lat_a_input = st.number_input("纬度 (起点A)", value=32.2322, format="%.6f", key="lat_a_input")
-            lon_a_input = st.number_input("经度 (起点A)", value=118.7490, format="%.6f", key="lon_a")
+            lon_a_input = st.number_input("经度 (起点A)", value=118.7490, format="%.6f", key="lon_a_input")
         with col_b:
             st.subheader("终点 B")
-            lat_b_input = st.number_input("纬度 (终点B)", value=32.2343, format="%.6f", key="lat_b")
-            lon_b_input = st.number_input("经度 (终点B)", value=118.7490, format="%.6f", key="lon_b")
+            lat_b_input = st.number_input("纬度 (终点B)", value=32.2343, format="%.6f", key="lat_b_input")
+            lon_b_input = st.number_input("经度 (终点B)", value=118.7490, format="%.6f", key="lon_b_input")
 
         st.subheader("飞行参数")
         flight_height = st.slider("设定飞行高度 (m)", min_value=10, max_value=150, value=50, key="flight_height_slider")
@@ -238,8 +238,8 @@ if page == "航线规划":
     st.session_state.a_set = True
     st.session_state.b_set = True
 
-    # 生成地图（添加唯一key）
-    if st.button("🗺️ 生成路径地图", key="generate_route_map"):
+    # 生成地图（唯一 key）
+    if st.button("🗺️ 生成路径地图", key="btn_generate_route_map"):
         # 以两点中点为地图中心，放大到校园级别
         center_lat = (lat_a + lat_b) / 2
         center_lon = (lon_a + lon_b) / 2
@@ -247,7 +247,7 @@ if page == "航线规划":
         # 使用高德地图瓦片源
         m = folium.Map(
             location=[center_lat, center_lon],
-            zoom_start=20,  # 放大到最高精度
+            zoom_start=20,  # 放大到最高精度，看清建筑
             tiles="https://webrd01.is.autonavi.cn/appmaptile?lang=zh&size=2&scale=1&style=8&x={x}&y={y}&z={z}",
             attr="高德地图"
         )
@@ -272,7 +272,7 @@ if page == "航线规划":
             opacity=0.7
         ).add_to(m)
 
-        # 示例障碍物
+        # 示例障碍物（可根据实际校园坐标修改）
         obstacle_points = [
             [(lat_a + 0.0005, lon_a), (lat_a + 0.0005, lon_a + 0.0003),
              (lat_a + 0.0010, lon_a + 0.0003), (lat_a + 0.0010, lon_a)],
@@ -303,7 +303,7 @@ elif page == "飞行监控":
     # 操作按钮区
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("发送心跳", key="send_heartbeat"):
+        if st.button("发送心跳", key="btn_send_heartbeat"):
             timestamp = datetime.now()
             st.session_state.heartbeat_data.append({
                 "序号": len(st.session_state.heartbeat_data) + 1,
@@ -311,7 +311,7 @@ elif page == "飞行监控":
                 "时间戳": timestamp.timestamp()
             })
     with col2:
-        auto_heartbeat = st.checkbox("自动模拟心跳（每秒1次）", key="auto_heartbeat_checkbox")
+        auto_heartbeat = st.checkbox("自动模拟心跳（每秒1次）", key="chk_auto_heartbeat")
 
     # 自动心跳逻辑
     if auto_heartbeat:
@@ -328,8 +328,8 @@ elif page == "飞行监控":
     if st.session_state.heartbeat_data:
         df = pd.DataFrame(st.session_state.heartbeat_data)
         st.subheader("心跳时序变化")
-        st.line_chart(df.set_index("时间")["时间戳"], use_container_width=True, key="heartbeat_line_chart")
-        st.dataframe(df, use_container_width=True, key="heartbeat_dataframe")
+        st.line_chart(df.set_index("时间")["时间戳"], use_container_width=True, key="chart_heartbeat")
+        st.dataframe(df, use_container_width=True, key="table_heartbeat")
 
 st.divider()
 st.caption("分组作业3-项目Demo | 无人机智能化应用2421")
