@@ -215,7 +215,7 @@ if page == "航线规划":
         col_a, col_b = st.columns(2)
         with col_a:
             st.subheader("起点 A")
-            lat_a_input = st.number_input("纬度 (起点A)", value=32.2322, format="%.6f", key="lat_a")
+            lat_a_input = st.number_input("纬度 (起点A)", value=32.2322, format="%.6f", key="lat_a_input")
             lon_a_input = st.number_input("经度 (起点A)", value=118.7490, format="%.6f", key="lon_a")
         with col_b:
             st.subheader("终点 B")
