@@ -179,4 +179,3 @@ if st.button("🗺️ 生成路径地图"):
 
     # 在Streamlit中渲染地图
     folium_static(m, width=1200, height=700)
-   
