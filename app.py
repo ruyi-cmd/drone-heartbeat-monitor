@@ -1,52 +1,74 @@
 import streamlit as st
-import time
 import pandas as pd
+import folium
+from streamlit_folium import folium_static
+import time
 from datetime import datetime
 
+# ---------------------- 原有心跳监测部分 ----------------------
 st.title("无人机通信心跳监测可视化")
 
-# 初始化数据
-if "heartbeats" not in st.session_state:
-    st.session_state.heartbeats = []
-    st.session_state.last_time = time.time()
-    st.session_state.seq = 0
+# 模拟心跳数据（你原有的逻辑）
+if "heartbeat_data" not in st.session_state:
+    st.session_state.heartbeat_data = []
 
-# 模拟心跳生成
-def generate_heartbeat():
-    st.session_state.seq += 1
-    now = datetime.now()
-    st.session_state.heartbeats.append({
-        "序号": st.session_state.seq,
-        "时间": now,
-        "时间戳": time.time()
-    })
-    st.session_state.last_time = time.time()
-
-# 检测掉线
-def check_disconnect():
-    current_time = time.time()
-    if current_time - st.session_state.last_time > 3:
-        st.error("⚠️ 超时：3秒未收到心跳包，无人机可能掉线！")
-
-# 界面控制
 col1, col2 = st.columns(2)
 with col1:
     if st.button("发送心跳"):
-        generate_heartbeat()
+        timestamp = datetime.now()
+        st.session_state.heartbeat_data.append({
+            "序号": len(st.session_state.heartbeat_data)+1,
+            "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            "时间戳": timestamp.timestamp()
+        })
 with col2:
-    if st.button("检查连接"):
-        check_disconnect()
+    st.checkbox("自动模拟心跳（每秒1次）", key="auto_heartbeat")
 
-# 自动模拟心跳（可选）
-if st.checkbox("自动模拟心跳（每秒1次）"):
-    while True:
-        generate_heartbeat()
-        time.sleep(1)
-        st.rerun()
+if st.session_state.auto_heartbeat:
+    timestamp = datetime.now()
+    st.session_state.heartbeat_data.append({
+        "序号": len(st.session_state.heartbeat_data)+1,
+        "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+        "时间戳": timestamp.timestamp()
+    })
+    time.sleep(1)
+    st.rerun()
 
-# 数据可视化
-if st.session_state.heartbeats:
-    df = pd.DataFrame(st.session_state.heartbeats)
+# 显示心跳时序图和表格
+if st.session_state.heartbeat_data:
+    df = pd.DataFrame(st.session_state.heartbeat_data)
     st.subheader("心跳时序变化")
-    st.line_chart(df, x="时间", y="序号")
+    st.line_chart(df.set_index("时间")["时间戳"])
     st.dataframe(df)
+
+# ---------------------- 新增地图功能部分 ----------------------
+st.subheader("无人机路径规划地图")
+
+# 输入经纬度（GCJ-02坐标系，校园内坐标）
+col_a, col_b = st.columns(2)
+with col_a:
+    st.write("**起点 A**")
+    lat_a = st.number_input("纬度", value=32.2322, format="%.6f")
+    lon_a = st.number_input("经度", value=118.7490, format="%.6f")
+with col_b:
+    st.write("**终点 B**")
+    lat_b = st.number_input("纬度", value=32.2343, format="%.6f")
+    lon_b = st.number_input("经度", value=118.7490, format="%.6f")
+
+# 飞行高度设置
+flight_height = st.slider("设定飞行高度(m)", min_value=10, max_value=150, value=50)
+
+# 生成地图
+if st.button("生成路径地图"):
+    # 以校园为中心创建地图
+    m = folium.Map(location=[(lat_a+lat_b)/2, (lon_a+lon_b)/2], zoom_start=18)
+    
+    # 标记起点A和终点B
+    folium.Marker([lat_a, lon_a], popup="起点 A", icon=folium.Icon(color="red")).add_to(m)
+    folium.Marker([lat_b, lon_b], popup="终点 B", icon=folium.Icon(color="green")).add_to(m)
+    
+    # 绘制两点连线（后续可加入避障算法）
+    folium.PolyLine(locations=[[lat_a, lon_a], [lat_b, lon_b]], color="blue", weight=3).add_to(m)
+    
+    # 在Streamlit中显示地图
+    folium_static(m, width=1000, height=600)
