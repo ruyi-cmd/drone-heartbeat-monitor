@@ -76,7 +76,7 @@ with st.sidebar:
     st.success(f"当前模式：{st.session_state.avoid_mode}")
 
 # 主地图
-m = folium.Map(location=[32.212, 118.724], zoom_start=15)
+m = folium.Map(location=[32.212, 118.724], zoom_start=15, tiles='https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&x={x}&y={y}&z={z}', attr='高德地图')
 
 # 画障碍物
 for obs in st.session_state.obstacles:
