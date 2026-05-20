@@ -1,260 +1,157 @@
 import streamlit as st
-import time
-import pandas as pd
-from datetime import datetime
-
-st.title("无人机通信心跳监测可视化")
-
-# 初始化数据
-if "heartbeats" not in st.session_state:
-    st.session_state.heartbeats = []
-    st.session_state.last_time = time.time()
-    st.session_state.seq = 0
-
-# 模拟心跳生成
-def generate_heartbeat():
-    st.session_state.seq += 1
-    now = datetime.now()
-    st.session_state.heartbeats.append({
-        "序号": st.session_state.seq,
-        "时间": now,
-        "时间戳": time.time()
-    })
-    st.session_state.last_time = time.time()
-
-# 检测掉线
-def check_disconnect():
-    current_time = time.time()
-    if current_time - st.session_state.last_time > 3:
-        st.error("⚠️ 超时：3秒未收到心跳包，无人机可能掉线！")
-
-# 界面控制
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("发送心跳"):
-        generate_heartbeat()
-with col2:
-    if st.button("检查连接"):
-        check_disconnect()
-
-# 自动模拟心跳（可选）
-if st.checkbox("自动模拟心跳（每秒1次）"):
-    while True:
-        generate_heartbeat()
-        time.sleep(1)
-        st.rerun()
-
-# 可视化
-if st.session_state.heartbeats:
-    df = pd.DataFrame(st.session_state.heartbeats)
-    st.subheader("心跳时序变化")
-    st.line_chart(df, x="时间", y="序号")
-    st.dataframe(df)
+import streamlit_leaflet as sl
 import math
-import streamlit as st
-import pandas as pd
-import folium
-from streamlit_folium import folium_static
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# ---------------------- 坐标转换核心工具类 ----------------------
-class CoordTransformer:
-    """
-    WGS-84 与 GCJ-02 坐标系转换工具
-    * WGS-84：全球通用坐标系（GPS、谷歌地球）
-    * GCJ-02：国测局坐标系（高德、百度、国内地图）
-    """
-    def __init__(self):
-        self.a = 6378245.0  # 长半轴
-        self.ee = 0.00669342162296594323  # 第一偏心率平方
+# -------------------------- 页面基础配置 --------------------------
+st.set_page_config(page_title="无人机航线规划&心跳监测", layout="wide")
 
-    def _transform_lat(self, x, y):
-        ret = -100.0 + 2.0*x + 3.0*y + 0.2*y*y + 0.1*x*y + 0.2*math.sqrt(abs(x))
-        ret += (20.0*math.sin(6.0*x*math.pi) + 20.0*math.sin(2.0*x*math.pi)) * 2.0 / 3.0
-        ret += (20.0*math.sin(y*math.pi) + 40.0*math.sin(y/3.0*math.pi)) * 2.0 / 3.0
-        ret += (160.0*math.sin(y/12.0*math.pi) + 320.0*math.sin(y*math.pi/30.0)) * 2.0 / 3.0
-        return ret
+# -------------------------- 全局变量初始化 --------------------------
+if "waypoints" not in st.session_state:
+    st.session_state.waypoints = []
+if "current_wp_idx" not in st.session_state:
+    st.session_state.current_wp_idx = 0
+if "is_flying" not in st.session_state:
+    st.session_state.is_flying = False
+if "heartbeat_running" not in st.session_state:
+    st.session_state.heartbeat_running = False
+if "obstacles" not in st.session_state:
+    st.session_state.obstacles = []
+if "fly_speed" not in st.session_state:
+    st.session_state.fly_speed = 8.5  # 基础飞行速度m/s
+if "safe_distance" not in st.session_state:
+    st.session_state.safe_distance = 5.0
+if "avoid_mode" not in st.session_state:
+    st.session_state.avoid_mode = "右绕航线"
 
-    def _transform_lon(self, x, y):
-        ret = 300.0 + x + 2.0*y + 0.1*x*x + 0.1*x*y + 0.1*math.sqrt(abs(x))
-        ret += (20.0*math.sin(6.0*x*math.pi) + 20.0*math.sin(2.0*x*math.pi)) * 2.0 / 3.0
-        ret += (20.0*math.sin(x*math.pi) + 40.0*math.sin(x/3.0*math.pi)) * 2.0 / 3.0
-        ret += (150.0*math.sin(x/12.0*math.pi) + 300.0*math.sin(x/30.0*math.pi)) * 2.0 / 3.0
-        return ret
+# -------------------------- 核心计算函数（精准修复ETA时间） --------------------------
+def get_point_dist(p1, p2):
+    """两点平面距离计算"""
+    return math.hypot(p2[0]-p1[0], p2[1]-p1[1])
 
-    def wgs84_to_gcj02(self, lat, lon):
-        """WGS-84 转 GCJ-02"""
-        if not (72.004 <= lon <= 137.8347 and 0.8293 <= lat <= 55.8271):
-            return lat, lon # 国外范围直接返回，不转换
-        
-        dLat = self._transform_lat(lon-105.0, lat-35.0)
-        dLon = self._transform_lon(lon-105.0, lat-35.0)
-        radLat = lat / 180.0 * math.pi
-        magic = math.sin(radLat)
-        magic = 1 - self.ee * magic * magic
-        sqrtMagic = math.sqrt(magic)
-        dLat = (dLat * 180.0) / ((self.a * (1 - self.ee)) / (magic * sqrtMagic) * math.pi)
-        dLon = (dLon * 180.0) / (self.a / sqrtMagic * math.cos(radLat) * math.pi)
-        return lat + dLat, lon + dLon
+def calc_route_total_dist(waypoints):
+    """计算整条航线折线总距离"""
+    total = 0.0
+    for i in range(len(waypoints)-1):
+        total += get_point_dist(waypoints[i], waypoints[i+1])
+    return total
 
-# 全局初始化转换器
-transformer = CoordTransformer()
+def calc_flown_dist(waypoints, current_idx):
+    """计算已飞行距离"""
+    flown = 0.0
+    for i in range(current_idx):
+        flown += get_point_dist(waypoints[i], waypoints[i+1])
+    return flown
 
-# 页面配置
-st.set_page_config(page_title="无人机智能化应用Demo", layout="wide")
+def get_real_speed(current_idx, waypoints, base_speed=8.5, turn_speed=5.0):
+    """转弯自动减速，动态真实速度"""
+    if 1 <= current_idx <= len(waypoints)-2:
+        p0, p1, p2 = waypoints[current_idx-1], waypoints[current_idx], waypoints[current_idx+1]
+        v1 = (p1[0]-p0[0], p1[1]-p0[1])
+        v2 = (p2[0]-p1[0], p2[1]-p1[1])
+        dot = v1[0]*v2[0] + v1[1]*v2[1]
+        if dot < 0.8:
+            return turn_speed
+    return base_speed
 
-# ---------------------- 侧边栏导航 ----------------------
+# -------------------------- 侧边栏：导航&安全设置 --------------------------
 with st.sidebar:
     st.title("导航")
-    page = st.radio("功能页面", ["航线规划", "飞行监控"], key="page_selector")
-    st.divider()
-    
-    st.title("坐标系设置")
-    coord_system = st.radio("输入坐标系", ["WGS-84", "GCJ-02(高德/百度)"], key="coord_system_selector")
-    st.divider()
-    
-    st.title("系统状态")
-    if "a_set" not in st.session_state:
-        st.session_state.a_set = False
-    if "b_set" not in st.session_state:
-        st.session_state.b_set = False
-    st.success("A点已设" if st.session_state.a_set else "A点未设")
-    st.success("B点已设" if st.session_state.b_set else "B点未设")
+    nav_mode = st.radio("", ["航线规划", "飞行监控"])
 
-# ---------------------- 页面1：航线规划 ----------------------
-if page == "航线规划":
-    st.title("无人机路径规划与地图显示")
-    
-    st.info("""
-    **作业要求说明**：
-    1.  输入经纬度，设置起点A和终点B（需在校园内）
-    2.  支持坐标系转换（WGS-84 ↔ GCJ-02）
-    3.  两点之间需包含多个障碍物
-    4.  放大后可清晰查看二维地图样貌，便于圈选障碍物
-    """)
+    st.markdown("---")
+    st.subheader("障碍物圈选")
+    obs_name = st.text_input("障碍物名称", value="教学楼")
+    obs_height = st.number_input("高度(m)", value=20)
+    if st.button("选择终点"):
+        st.info("地图点击圈选障碍物")
 
-    # 控制面板：坐标与飞行参数
-    with st.expander("📊 控制面板", expanded=True):
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader("起点 A")
-            lat_a_input = st.number_input("纬度 (起点A)", value=32.2322, format="%.6f", key="lat_a_input")
-            lon_a_input = st.number_input("经度 (起点A)", value=118.7490, format="%.6f", key="lon_a_input")
-        with col_b:
-            st.subheader("终点 B")
-            lat_b_input = st.number_input("纬度 (终点B)", value=32.2343, format="%.6f", key="lat_b_input")
-            lon_b_input = st.number_input("经度 (终点B)", value=118.7490, format="%.6f", key="lon_b_input")
+    st.markdown("---")
+    st.subheader("安全设置")
+    st.session_state.safe_distance = st.slider("安全距离(米)", min_value=1.0, max_value=20.0, value=5.0)
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if st.button("上绕避障"):
+            st.session_state.avoid_mode = "上绕航线"
+    with col2:
+        if st.button("左绕航线"):
+            st.session_state.avoid_mode = "左绕航线"
+    with col3:
+        if st.button("右绕航线"):
+            st.session_state.avoid_mode = "右绕航线"
+    st.success(f"{st.session_state.avoid_mode}已设置!")
 
-        st.subheader("飞行参数")
-        flight_height = st.slider("设定飞行高度 (m)", min_value=10, max_value=150, value=50, key="flight_height_slider")
+# -------------------------- 主界面：地图+飞行状态 --------------------------
+# 地图组件
+m = sl.Leaflet(height=450, center=[32.21, 118.72], zoom=14)
+for wp in st.session_state.waypoints:
+    m.add_marker(location=wp, icon="green")
+if len(st.session_state.waypoints)>=2:
+    m.add_polyline(st.session_state.waypoints, color="orange", weight=3)
+map_click = m.add_draw()
+st_map = m.display()
 
-    # 坐标系转换
-    if coord_system == "WGS-84":
-        lat_a, lon_a = transformer.wgs84_to_gcj02(lat_a_input, lon_a_input)
-        lat_b, lon_b = transformer.wgs84_to_gcj02(lat_b_input, lon_b_input)
-        st.info("已将 WGS-84 坐标转换为 GCJ-02 坐标用于地图显示")
-    else:
-        lat_a, lon_a = lat_a_input, lon_a_input
-        lat_b, lon_b = lat_b_input, lon_b_input
-
-    # 更新系统状态
-    st.session_state.a_set = True
-    st.session_state.b_set = True
-
-    # 生成地图（唯一 key）
-    if st.button("🗺️ 生成路径地图", key="btn_generate_route_map"):
-        # 以两点中点为地图中心，放大到校园级别
-        center_lat = (lat_a + lat_b) / 2
-        center_lon = (lon_a + lon_b) / 2
-        
-        # 使用高德地图瓦片源
-        m = folium.Map(
-            location=[center_lat, center_lon],
-            zoom_start=20,  # 放大到最高精度，看清建筑
-            tiles="https://webrd01.is.autonavi.cn/appmaptile?lang=zh&size=2&scale=1&style=8&x={x}&y={y}&z={z}",
-            attr="高德地图"
-        )
-
-        # 标记起点A和终点B
-        folium.Marker(
-            [lat_a, lon_a],
-            popup="起点 A",
-            icon=folium.Icon(color="red", icon="play")
-        ).add_to(m)
-        folium.Marker(
-            [lat_b, lon_b],
-            popup="终点 B",
-            icon=folium.Icon(color="green", icon="stop")
-        ).add_to(m)
-
-        # 绘制直线路径
-        folium.PolyLine(
-            locations=[[lat_a, lon_a], [lat_b, lon_b]],
-            color="blue",
-            weight=4,
-            opacity=0.7
-        ).add_to(m)
-
-        # 示例障碍物（可根据实际校园坐标修改）
-        obstacle_points = [
-            [(lat_a + 0.0005, lon_a), (lat_a + 0.0005, lon_a + 0.0003),
-             (lat_a + 0.0010, lon_a + 0.0003), (lat_a + 0.0010, lon_a)],
-            [(lat_a + 0.0015, lon_a + 0.0002), (lat_a + 0.0015, lon_a + 0.0005),
-             (lat_a + 0.0020, lon_a + 0.0005), (lat_a + 0.0020, lon_a + 0.0002)]
-        ]
-        for obs in obstacle_points:
-            folium.Polygon(
-                locations=obs,
-                color="gray",
-                fill=True,
-                fill_color="gray",
-                fill_opacity=0.5,
-                popup="障碍物"
-            ).add_to(m)
-
-        # 在Streamlit中渲染地图
-        folium_static(m, width=1200, height=700)
-
-# ---------------------- 页面2：飞行监控（心跳包） ----------------------
-elif page == "飞行监控":
-    st.title("无人机通信心跳监测可视化")
-
-    # 初始化会话状态
-    if "heartbeat_data" not in st.session_state:
-        st.session_state.heartbeat_data = []
-
-    # 操作按钮区
+# 航线规划模式
+if nav_mode == "航线规划":
+    st.subheader("📍 航线规划")
+    st.info("点击地图添加航点，规划飞行路径")
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("发送心跳", key="btn_send_heartbeat"):
-            timestamp = datetime.now()
-            st.session_state.heartbeat_data.append({
-                "序号": len(st.session_state.heartbeat_data) + 1,
-                "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                "时间戳": timestamp.timestamp()
-            })
+        if st.button("清除所有航点"):
+            st.session_state.waypoints = []
+            st.rerun()
     with col2:
-        auto_heartbeat = st.checkbox("自动模拟心跳（每秒1次）", key="chk_auto_heartbeat")
+        if len(st.session_state.waypoints)>=2 and st.button("开始模拟飞行"):
+            st.session_state.is_flying = True
+            st.session_state.current_wp_idx = 0
 
-    # 自动心跳逻辑
-    if auto_heartbeat:
-        timestamp = datetime.now()
-        st.session_state.heartbeat_data.append({
-            "序号": len(st.session_state.heartbeat_data) + 1,
-            "时间": timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-            "时间戳": timestamp.timestamp()
-        })
-        time.sleep(1)
+# 飞行监控模式（核心修复时间逻辑）
+elif nav_mode == "飞行监控":
+    st.subheader("✈️ 飞行监控")
+    waypoints = st.session_state.waypoints
+    current_idx = st.session_state.current_wp_idx
+    total_dist = calc_route_total_dist(waypoints)
+    flown_dist = calc_flown_dist(waypoints, current_idx)
+    remaining_dist = total_dist - flown_dist
+    real_speed = get_real_speed(current_idx, waypoints, st.session_state.fly_speed)
+
+    # 计算预计到达时间
+    if real_speed>0 and remaining_dist>0:
+        eta_sec = remaining_dist / real_speed
+        arrival_time = datetime.now() + timedelta(seconds=eta_sec)
+    else:
+        eta_sec = 0
+        arrival_time = datetime.now()
+
+    # 顶部状态面板
+    col1, col2, col3, col4, col5 = st.columns(5)
+    col1.metric("当前航点", f"{current_idx}/{len(waypoints)-1}")
+    col2.metric("飞行速度", f"{real_speed:.1f} m/s")
+    col3.metric("已用时间", f"{int(flown_dist/real_speed)}秒")
+    col4.metric("剩余距离", f"{remaining_dist:.1f} m")
+    col5.metric("预计到达", arrival_time.strftime("%H:%M:%S"))
+
+    # 电量&进度
+    battery = max(0, 100 - (flown_dist/total_dist)*100) if total_dist>0 else 0
+    st.progress(battery/100, text=f"电量模拟 {battery:.1f}%")
+    st.progress((flown_dist/total_dist)*100 if total_dist>0 else 1, text=f"任务进度: {100 if total_dist==0 else round((flown_dist/total_dist)*100,1)}%")
+
+    # 心跳监测
+    st.markdown("### ❤️ 地面站心跳监测")
+    if st.button("开始心跳监测"):
+        st.session_state.heartbeat_running = True
+    if st.session_state.heartbeat_running:
+        st.success("心跳正常，实时通信中...")
+        time.sleep(0.1)
         st.rerun()
 
-    # 可视化心跳数据
-    if st.session_state.heartbeat_data:
-        df = pd.DataFrame(st.session_state.heartbeat_data)
-        st.subheader("心跳时序变化")
-        st.line_chart(df.set_index("时间")["时间戳"], use_container_width=True, key="chart_heartbeat")
-        st.dataframe(df, use_container_width=True, key="table_heartbeat")
+    # 模拟航点自动前进
+    if st.session_state.is_flying and current_idx < len(waypoints)-1:
+        time.sleep(0.3)
+        st.session_state.current_wp_idx += 1
+        st.rerun()
+    elif st.session_state.is_flying:
+        st.session_state.is_flying = False
+        st.success("✅ 航线任务完成！")
 
-st.divider()
-st.caption("分组作业3-项目Demo | 无人机智能化应用2421")
-       
